@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# team-brain launcher. Engine code lives next to this script; the brain (instance)
+# is found via BRAIN_ROOT or the nearest teambrain.yaml above the current directory.
+set -euo pipefail
+
+# Resolve symlinks (./brain and ~/.local/bin/brain both point here) so the engine
+# root stays the checkout, on macOS and Linux.
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _dir="$(cd "$(dirname "$_self")" && pwd)"
+  _target="$(readlink "$_self")"
+  case "$_target" in
+    /*) _self="$_target" ;;
+    *) _self="$_dir/$_target" ;;
+  esac
+done
+ENGINE="$(cd "$(dirname "$_self")/.." && pwd)"
+VENV="${TEAMBRAIN_VENV:-$HOME/.team-brain/venv}"
+PY="${TEAMBRAIN_PYTHON:-$VENV/bin/python}"
+cmd="${1:-help}"
+shift || true
+
+# Use the brain from `brain init` when this directory is not one. Never overrides BRAIN_ROOT
+# or a teambrain.yaml above cwd.
+if [ -z "${BRAIN_ROOT:-}" ]; then
+  _d="$PWD"
+  while [ "$_d" != "/" ] && [ ! -f "$_d/teambrain.yaml" ]; do _d="$(dirname "$_d")"; done
+  if [ ! -f "$_d/teambrain.yaml" ]; then
+    _current="${TEAMBRAIN_CURRENT:-$HOME/.team-brain/current}"
+    if [ -f "$_current" ]; then
+      _saved="$(head -n 1 "$_current" 2>/dev/null || true)"
+      if [ -n "$_saved" ] && [ -d "$_saved" ]; then
+        export BRAIN_ROOT="$_saved"
+      fi
+    fi
+  fi
+fi
+
+usage() {
+  cat <<'EOF'
+brain <command>
+  init [path]        import notes, index them, install nightly jobs, connect Claude Code
+  ask "question"     debug search: print the context a prompt hook would inject
+  doctor             check the install; one fix command per problem
+  review             one card at a time: keep / fix / archive / skip / undo
+  setup              create the venv (~/.team-brain/venv) and install dependencies
+  index [--incremental]  rebuild the search index (or re-embed only changed files)
+  mcp                run the MCP search server (stdio)
+  query              JSON stdin/stdout recall adapter
+  backlog <cmd>      status | list | review | mark | append | support
+  loop <cmd>         ingest | pending | finish | publish | status
+  retro <cmd>        digest | mark | status | run   (daily session retro)
+  lint [--json]      stale / idle / duplicate / broken-link report (read-only)
+  eval [ids]         run behavioral evals
+  eval-compare FILE  compare evals: current system file vs FILE
+  hook-search        UserPromptSubmit hook (reads hook JSON on stdin)
+  hook-stop          Stop hook (reads hook JSON on stdin)
+  hook-session-start SessionStart hook: offer setup/onboarding if missing; incremental re-index in the background
+  onboard [--defaults|--status]  first-run setup: index + the brain's yes/no opt-ins + nightly jobs
+  wip ["message"]    snapshot uncommitted work to the local branch wip/<you> (never pushes)
+  suggest            Claude compares your ~/.claude with the brain and proposes a pull request
+  schedule <cmd>     install [--dry-run] | uninstall | status  (nightly jobs from teambrain.yaml)
+  snapshot [dir]     local-only version history for a git-ignored folder (default: raw)
+  root               print the resolved brain root
+EOF
+}
+
+if [ "$cmd" = "setup" ]; then
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3.10; do
+    if command -v "$candidate" >/dev/null 2>&1; then BASE="$candidate"; break; fi
+  done
+  : "${BASE:?team-brain needs Python 3.10+}"
+  "$BASE" -m venv "$VENV"
+  "$VENV/bin/pip" install -q --upgrade pip
+  "$VENV/bin/pip" install -q -r "$ENGINE/requirements.txt"
+  echo "Alma: venv ready at $VENV"
+  exit 0
+fi
+
+if [ "$cmd" = "snapshot" ]; then
+  # Version history for a working folder that the brain's own git ignores (e.g. raw/).
+  # A separate local repo inside that folder, never given a remote. Nightly via `brain schedule`, or by hand.
+  # Restore: git -C <dir> log --stat -- <path>; git -C <dir> checkout <commit> -- <path>
+  # The path must stay inside the brain. Symlinks, worktrees and any other repository are refused.
+  ROOT="${BRAIN_ROOT:-}"
+  if [ -z "$ROOT" ]; then
+    d="$PWD"; while [ "$d" != "/" ] && [ ! -f "$d/teambrain.yaml" ]; do d="$(dirname "$d")"; done
+    [ -f "$d/teambrain.yaml" ] && ROOT="$d"
+  fi
+  : "${ROOT:?not inside a brain (no teambrain.yaml found; set BRAIN_ROOT)}"
+  ROOT="$(cd "$ROOT" && pwd -P)"
+  REL="${1:-raw}"
+  case "$REL" in
+    /*|~*) echo "snapshot: refusing absolute path" >&2; exit 1 ;;
+  esac
+  CUR="$ROOT"
+  old_ifs=$IFS
+  IFS=/ read -ra PARTS <<< "$REL"
+  IFS=$old_ifs
+  for part in "${PARTS[@]}"; do
+    case "$part" in
+      ""|"."|"..") echo "snapshot: refusing path outside the brain" >&2; exit 1 ;;
+    esac
+    CUR="$CUR/$part"
+    if [ -L "$CUR" ]; then
+      echo "snapshot: refusing symlink $CUR" >&2
+      exit 1
+    fi
+  done
+  mkdir -p "$CUR"
+  PHYS="$(cd "$CUR" && pwd -P)"
+  case "$PHYS" in
+    "$ROOT"/*) ;;
+    *) echo "snapshot: refusing path outside the brain" >&2; exit 1 ;;
+  esac
+  DIR="$PHYS"
+  snapshot_git() {
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE \
+      git -C "$DIR" "$@"
+  }
+  if [ -L "$DIR/.git" ] || [ -f "$DIR/.git" ]; then
+    echo "snapshot: refusing linked git metadata (worktree or gitfile)" >&2
+    exit 1
+  fi
+  if [ -d "$DIR/.git" ]; then
+    gitdir="$(snapshot_git rev-parse --absolute-git-dir)"
+    common="$(snapshot_git rev-parse --path-format=absolute --git-common-dir)"
+    expected="$(cd "$DIR/.git" && pwd -P)"
+    if [ "$gitdir" != "$expected" ] || [ "$common" != "$expected" ]; then
+      echo "snapshot: refusing repository linked outside $DIR" >&2
+      exit 1
+    fi
+    if snapshot_git remote | grep -q .; then
+      echo "snapshot: $DIR has a git remote; refusing (this history must stay local)" >&2
+      exit 1
+    fi
+    if [ ! -f "$DIR/.git/brain-snapshot" ]; then
+      echo "snapshot: refusing existing repository not created by brain snapshot" >&2
+      exit 1
+    fi
+  else
+    snapshot_git init -q
+    printf '.DS_Store\nnode_modules/\n' > "$DIR/.gitignore"
+    : > "$DIR/.git/brain-snapshot"
+  fi
+  snapshot_git add -A
+  if snapshot_git diff --cached --quiet; then
+    echo "snapshot: no changes in $DIR"
+  else
+    snapshot_git -c user.name=snapshot -c user.email=snapshot@localhost \
+      commit -q -m "snapshot $(date '+%F %H:%M')" && echo "snapshot: saved $DIR"
+  fi
+  exit 0
+fi
+
+if [ ! -x "$PY" ]; then
+  if [ "$cmd" = "hook-session-start" ]; then
+    # Not set up on this machine: inside a brain, ask Claude to offer setup. Never blocks.
+    cat >/dev/null 2>&1 || true
+    d="${BRAIN_ROOT:-$PWD}"; while [ "$d" != "/" ] && [ ! -f "$d/teambrain.yaml" ]; do d="$(dirname "$d")"; done
+    if [ -f "$d/teambrain.yaml" ]; then
+      printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"This team brain is not set up on this machine yet (no engine venv). In your first reply, briefly offer to run it: they type \`! $ENGINE/bin/brain setup && $ENGINE/bin/brain onboard\` (a few minutes; it asks a few yes/no questions). Don't run it without their yes. Offer once per session.\"}}"
+    fi
+    exit 0
+  fi
+  case "$cmd" in hook-*) exit 0 ;; esac  # hooks never block a message
+  if [ "$cmd" = "doctor" ]; then
+    BASE=""
+    for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+      if command -v "$candidate" >/dev/null 2>&1; then BASE="$candidate"; break; fi
+    done
+    if [ -z "$BASE" ]; then
+      printf '%s\n' "fail  Python 3.10+ is not installed" \
+        "      fix: install Python 3.10+ and run brain setup" \
+        "brain doctor: 1 problem"
+      exit 1
+    fi
+    export PYTHONPATH="$ENGINE${PYTHONPATH:+:$PYTHONPATH}"
+    exec "$BASE" -m teambrain.doctor "$@"
+  fi
+  echo "team-brain: run 'brain setup' first (or ./setup.sh)" >&2
+  exit 1
+fi
+
+export PYTHONPATH="$ENGINE${PYTHONPATH:+:$PYTHONPATH}"
+
+case "$cmd" in
+  init)         exec "$PY" -m teambrain.init "$@" ;;
+  ask)          exec "$PY" -m teambrain.ask "$@" ;;
+  doctor)       exec "$PY" -m teambrain.doctor "$@" ;;
+  review)       exec "$PY" -m teambrain.review "$@" ;;
+  index)        exec "$PY" -m teambrain.index "$@" ;;
+  mcp)          exec "$PY" -m teambrain.server "$@" ;;
+  query)        exec "$PY" -m teambrain.query "$@" ;;
+  backlog)      exec "$PY" -m teambrain.backlog "$@" ;;
+  loop)         exec "$PY" -m teambrain.loop "$@" ;;
+  retro)        exec "$PY" -m teambrain.retro "$@" ;;
+  lint)         exec "$PY" -m teambrain.lint "$@" ;;
+  schedule)     exec "$PY" -m teambrain.schedule "$@" ;;
+  onboard)      exec "$PY" -m teambrain.onboard "$@" ;;
+  wip)          exec "$PY" -m teambrain.wip "$@" ;;
+  suggest)      exec "$PY" -m teambrain.suggest "$@" ;;
+  eval)         exec "$PY" -m teambrain.evals "$@" ;;
+  eval-compare) exec "$PY" -m teambrain.compare_evals "$@" ;;
+  hook-search)  exec "$PY" -m teambrain.hooks search ;;
+  hook-stop)    exec "$PY" -m teambrain.hooks stop ;;
+  hook-session-start)
+    # Never block session start: offer onboarding if needed (stdout), then detach the re-index; always exit 0.
+    # The index lock skips parallel runs.
+    "$PY" -m teambrain.hooks session-start 2>/dev/null || true
+    nohup "$PY" -m teambrain.index --incremental >/dev/null 2>&1 &
+    exit 0 ;;
+  root)         exec "$PY" -c 'from teambrain.config import find_root; print(find_root() or "")' ;;
+  *)            usage ;;
+esac

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.brain/
+.lancedb/
+.private/
+.venv/
+.DS_Store
+!tests/fixture-brain/.private/

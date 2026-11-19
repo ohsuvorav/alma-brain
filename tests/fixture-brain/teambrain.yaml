@@ -1,0 +1,8 @@
+name: fixture
+index:
+  dirs: [wiki, raw, .private]
+  source_types:
+    - {glob: "wiki/*principles.md", type: article}
+    - {glob: ".private/*", type: fact}
+mcp:
+  search_tool: search_fixture

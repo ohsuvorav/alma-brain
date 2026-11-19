@@ -1,0 +1,98 @@
+# team-brain instance config. Lives at the brain root; the engine finds it by walking up from cwd.
+# Every key is optional — omitted keys use the engine defaults (teambrain/config.py).
+name: my-brain
+
+# Engine state (index, logs, traces). Gitignore it.
+state_dir: .brain
+# Sensitive human-readable facts + backlog locks. Gitignore it.
+private_dir: .private
+
+index:
+  dirs: [wiki, raw]
+  # Default model is intfloat/multilingual-e5-small (English and Russian, 384-d).
+  # The engine adds the required "query: " / "passage: " prefixes and rebuilds the index
+  # when the model or the prefixes change. Set both prefixes to "" for a model that has none.
+  # embed_model: BAAI/bge-small-en-v1.5
+  # embed_query_prefix: ""
+  # embed_passage_prefix: ""
+  # vector_dim: 384
+  # Sources outside the root, with a fixed source type:
+  # extra_dirs:
+  #   - {path: ~/.claude/projects/<project>/memory, type: memory}
+  # Index what you typed in this project's Claude Code sessions (off unless enabled).
+  # The glob is one project directory, never ~/.claude/projects/* .
+  # chats: {enabled: true, glob: "~/.claude/projects/<one-project>/*.jsonl", min_words: 4, label: User}
+  source_types:            # first glob match wins; default "log"
+    - {glob: "wiki/*principles.md", type: article}
+
+retrieval:
+  min_score: 0.35
+  limit: 5
+  max_per_file: 2
+  preview_chars: 300
+  # Hybrid scoring (engine defaults are off). Values below were tuned on a real EN+RU brain:
+  keyword_boost: 0.08      # exact-term matches (ticket keys, IDs) get +0.08; needs a re-index for the FTS table
+  relative_window: 0.12    # drop hits more than 0.12 below the best one
+  type_weights: {log: -0.04}   # rank unreviewed raw material slightly below curated pages
+  # Prompt hook filters:
+  min_words: 3
+  skip_slash_commands: true
+
+mcp:
+  search_tool: search_brain
+
+backlogs: [_wiki_backlog.md, _system_backlog.md]
+principles_glob: "wiki/*/principles.md"
+
+lint:
+  temp_glob: "raw/temp/*/"
+  idle_days: 21
+
+retro:
+  dir: wiki/claude-retro
+  rules_file: CLAUDE.md
+  # enabled: true
+  # transcripts: ~/.claude/projects/<one-project>/*.jsonl
+
+# First-run setup for teammates: `brain onboard` builds the index, asks these yes/no opt-ins and installs the
+# nightly jobs that apply. Answers are personal (<state_dir>/onboarding.json). Until someone has onboarded,
+# the SessionStart hook asks Claude to offer it. `run` (shell, in the brain root) on yes; `undo` on a later no.
+# $BRAIN is the engine launcher.
+onboarding:
+  questions: []
+  # questions:
+  #   - id: nightly-wip
+  #     ask: "Snapshot your uncommitted changes every night to a local branch wip/<you> (never pushed)?"
+  #     pros: "Your edits are versioned; share them later as a pull request"
+  #     cons: "None that leave your machine; it refuses secrets, unknown emails and big files"
+  #     default: y
+  #   - id: suggest
+  #     ask: "Compare your own Claude setup with this brain and suggest improvements as a pull request?"
+  #     pros: "A better skill or rule you have reaches the whole team"
+  #     cons: "A few minutes of Claude; nothing is pushed without your yes"
+  #     default: n
+  #     run: '"$BRAIN" suggest'
+
+# `brain wip`: nightly snapshot of uncommitted work to a local branch (schedule it with `when: nightly-wip`).
+wip:
+  allow_email_domains: [example.com, noreply]   # that domain or a subdomain; other emails refuse the snapshot
+
+# `brain suggest`: base branch for suggestion pull requests.
+suggest:
+  base: origin/main
+
+# Nightly jobs. `brain init` writes this list and installs it (launchd on macOS, crontab on Linux).
+# `brain schedule status` / `brain schedule uninstall`. Logs: <state_dir>/logs/<name>.log
+# retro is added only when one Claude Code project has transcripts and `claude` is installed.
+schedule:
+  jobs:
+    - {name: index,    run: "index --incremental", at: "03:15"}
+    - {name: lint,     run: "lint",          at: "02:30"}
+    - {name: snapshot, run: "snapshot raw",  at: "02:45"}
+  # - {name: retro,    run: "retro run",     at: "01:00"}
+  # - {name: wip,      run: "wip",           at: "03:00", when: nightly-wip}   # only for people who said yes
+
+evals:
+  cases_dir: evals/cases
+  results_dir: evals/results
+  system_file: CLAUDE.md

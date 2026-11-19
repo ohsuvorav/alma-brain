@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-label="Your agents read Alma. Alma gives that context back to you.">
+  <rect width="960" height="300" rx="16" fill="#f6f4ef"/>
+  <rect x="24" y="90" width="150" height="120" rx="12" fill="#ffffff" stroke="#d9d3c7"/>
+  <text x="99" y="156" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#24312c">Your agents</text>
+  <text x="196" y="146" font-family="Georgia, serif" font-size="14" fill="#1f6f5b">reads</text>
+  <polygon points="248,150 236,144 236,156" fill="#1f6f5b"/>
+  <line x1="186" y1="150" x2="236" y2="150" stroke="#1f6f5b" stroke-width="2"/>
+  <rect x="258" y="28" width="470" height="244" rx="16" fill="#1f6f5b"/>
+  <text x="493" y="62" text-anchor="middle" font-family="Georgia, serif" font-size="26" fill="#ffffff">Alma</text>
+  <g font-family="Georgia, serif" font-size="13" fill="#1f6f5b">
+    <rect x="284" y="84" width="120" height="36" rx="8" fill="#f6f4ef"/>
+    <text x="344" y="107" text-anchor="middle">instructions</text>
+    <rect x="418" y="84" width="90" height="36" rx="8" fill="#f6f4ef"/>
+    <text x="463" y="107" text-anchor="middle">wiki</text>
+    <rect x="522" y="84" width="110" height="36" rx="8" fill="#f6f4ef"/>
+    <text x="577" y="107" text-anchor="middle">capture</text>
+  </g>
+  <text x="493" y="148" text-anchor="middle" font-family="Georgia, serif" font-size="16" fill="#d7efe6">↓</text>
+  <g font-family="Georgia, serif" font-size="13" fill="#1f6f5b">
+    <rect x="278" y="168" width="130" height="36" rx="8" fill="#f6f4ef"/>
+    <text x="343" y="191" text-anchor="middle">session-learn</text>
+    <rect x="422" y="168" width="120" height="36" rx="8" fill="#f6f4ef"/>
+    <text x="482" y="191" text-anchor="middle">stale review</text>
+    <rect x="556" y="168" width="80" height="36" rx="8" fill="#f6f4ef"/>
+    <text x="596" y="191" text-anchor="middle">eval</text>
+  </g>
+  <text x="430" y="230" text-anchor="middle" font-family="Georgia, serif" font-size="13" fill="#d7efe6">capture → session-learn → stale review → eval</text>
+  <line x1="738" y1="150" x2="788" y2="150" stroke="#1f6f5b" stroke-width="2"/>
+  <polygon points="800,150 788,144 788,156" fill="#1f6f5b"/>
+  <text x="732" y="128" font-family="Georgia, serif" font-size="13" fill="#1f6f5b">gives you</text>
+  <rect x="810" y="90" width="126" height="120" rx="12" fill="#ffffff" stroke="#d9d3c7"/>
+  <text x="873" y="156" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#24312c">You</text>
+</svg>
